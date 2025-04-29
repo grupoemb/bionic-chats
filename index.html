@@ -268,6 +268,79 @@
       margin-bottom: 4px;
     }
 
+    /* Chat styles */
+    .chat-container {
+      display: none;
+      width: 100%;
+      margin-top: 24px;
+    }
+
+    .chat-messages {
+      max-height: 400px;
+      overflow-y: auto;
+      margin-bottom: 16px;
+      padding: 16px;
+      background-color: rgba(1, 22, 39, 0.3);
+      border-radius: 12px;
+      border: 1px solid rgba(6, 182, 212, 0.2);
+    }
+
+    .message {
+      margin-bottom: 16px;
+      padding: 12px;
+      border-radius: 8px;
+      max-width: 80%;
+      word-wrap: break-word;
+    }
+
+    .user-message {
+      background-color: rgba(6, 182, 212, 0.2);
+      color: #fff;
+      align-self: flex-end;
+      margin-left: auto;
+    }
+
+    .bot-message {
+      background-color: rgba(1, 22, 39, 0.6);
+      color: #a5f3fc;
+      align-self: flex-start;
+    }
+
+    .chat-input-container {
+      display: flex;
+      gap: 12px;
+    }
+
+    .loading-dots {
+      display: inline-block;
+      width: 60px;
+      height: 12px;
+    }
+
+    .loading-dots span {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background-color: #22d3ee;
+      margin-right: 6px;
+      animation: dotPulse 1.4s infinite ease-in-out;
+    }
+
+    .loading-dots span:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+
+    .loading-dots span:nth-child(3) {
+      animation-delay: 0.4s;
+      margin-right: 0;
+    }
+
+    @keyframes dotPulse {
+      0%, 80%, 100% { transform: scale(0); opacity: 0.5; }
+      40% { transform: scale(1); opacity: 1; }
+    }
+
     @keyframes slideIn {
       from {
         transform: translateX(100%);
@@ -354,12 +427,12 @@
           </svg>
           Bionic Alta Renda
         </h1>
-        <p class="subtitle">
+        <p class="subtitle" id="welcomeMessage">
           Olá, sou o Bionic's Reforço de Aprendizado. Me fale seu nome!
         </p>
       </div>
 
-      <!-- Form -->
+      <!-- Initial Form -->
       <form id="nameForm" class="form">
         <input 
           type="text" 
@@ -372,9 +445,29 @@
             <line x1="22" y1="2" x2="11" y2="13"></line>
             <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
           </svg>
-          Enviar
+          Iniciar Chat
         </button>
       </form>
+
+      <!-- Chat Container (hidden initially) -->
+      <div id="chatContainer" class="chat-container">
+        <div id="chatMessages" class="chat-messages"></div>
+        <div class="chat-input-container">
+          <input 
+            type="text" 
+            id="messageInput" 
+            class="input" 
+            placeholder="Digite sua mensagem..." 
+          />
+          <button id="sendMessageBtn" class="button">
+            <svg class="button-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+            Enviar
+          </button>
+        </div>
+      </div>
     </div>
   </div>
   
@@ -383,10 +476,29 @@
 
   <script>
     document.addEventListener('DOMContentLoaded', function() {
-      const form = document.getElementById('nameForm');
+      // Constants
+      const N8N_WEBHOOK_URL = 'https://grupoemb.app.n8n.cloud/webhook/c231c35a-d8de-4b94-8762-a146cc056f96/chat';
+      
+      // Element references
+      const nameForm = document.getElementById('nameForm');
       const nameInput = document.getElementById('nameInput');
+      const welcomeMessage = document.getElementById('welcomeMessage');
+      const chatContainer = document.getElementById('chatContainer');
+      const chatMessages = document.getElementById('chatMessages');
+      const messageInput = document.getElementById('messageInput');
+      const sendMessageBtn = document.getElementById('sendMessageBtn');
       const toastContainer = document.getElementById('toastContainer');
       
+      // Global variables
+      let userName = '';
+      let sessionId = '';
+      
+      // Generate a unique session ID
+      function generateSessionId() {
+        return 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      }
+      
+      // Show toast notification
       function showToast(title, description, variant = 'success') {
         const toast = document.createElement('div');
         toast.className = `toast toast-${variant}`;
@@ -407,24 +519,126 @@
         }, 5000);
       }
       
-      form.addEventListener('submit', async function(e) {
+      // Add a message to the chat UI
+      function addMessage(text, isUser = false) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
+        messageDiv.textContent = text;
+        chatMessages.appendChild(messageDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      }
+      
+      // Show loading indicator
+      function showLoadingIndicator() {
+        const loadingDiv = document.createElement('div');
+        loadingDiv.className = 'message bot-message loading';
+        loadingDiv.innerHTML = '<div class="loading-dots"><span></span><span></span><span></span></div>';
+        loadingDiv.id = 'loadingIndicator';
+        chatMessages.appendChild(loadingDiv);
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+      }
+      
+      // Hide loading indicator
+      function hideLoadingIndicator() {
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        if (loadingIndicator) {
+          chatMessages.removeChild(loadingIndicator);
+        }
+      }
+      
+      // Send message to n8n webhook
+      async function sendToWebhook(message, isFirstMessage = false) {
+        try {
+          showLoadingIndicator();
+          
+          const payload = {
+            sessionId: sessionId,
+            message: message
+          };
+          
+          // If it's the first message, include that it's the initial message
+          if (isFirstMessage) {
+            payload.isFirstMessage = true;
+            payload.userName = userName;
+          }
+          
+          const response = await fetch(N8N_WEBHOOK_URL, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(payload)
+          });
+          
+          if (!response.ok) {
+            throw new Error('Falha na comunicação com o servidor');
+          }
+          
+          const data = await response.json();
+          hideLoadingIndicator();
+          
+          // Add bot's response to chat
+          if (data.response) {
+            addMessage(data.response, false);
+          } else {
+            addMessage('Desculpe, ocorreu um erro ao processar sua mensagem.', false);
+          }
+          
+        } catch (error) {
+          hideLoadingIndicator();
+          console.error('Error:', error);
+          addMessage('Desculpe, ocorreu um erro de comunicação. Por favor, tente novamente.', false);
+          showToast('Erro', 'Falha na comunicação com o servidor', 'error');
+        }
+      }
+      
+      // Handle name form submission
+      nameForm.addEventListener('submit', async function(e) {
         e.preventDefault();
-        const name = nameInput.value;
+        userName = nameInput.value;
         
-        if (!name.trim()) {
+        if (!userName.trim()) {
           showToast('Campo obrigatório', 'Por favor, digite seu nome para continuar.', 'error');
           return;
         }
         
-        try {
-          // Simulate API call
-          await new Promise(resolve => setTimeout(resolve, 800));
-          showToast('Mensagem enviada!', `Olá ${name}, bem-vindo ao Bionic Alta Renda!`);
-          nameInput.value = '';
-        } catch (error) {
-          showToast('Erro ao enviar', 'Tente novamente em alguns instantes.', 'error');
+        // Generate a session ID for this chat
+        sessionId = generateSessionId();
+        
+        // Hide the name form and show the chat interface
+        nameForm.style.display = 'none';
+        chatContainer.style.display = 'block';
+        welcomeMessage.textContent = `Olá ${userName}, bem-vindo ao Bionic Alta Renda!`;
+        
+        // Send the first message to n8n
+        addMessage(`Olá, meu nome é ${userName}!`, true);
+        await sendToWebhook(`Olá, meu nome é ${userName}!`, true);
+      });
+      
+      // Handle sending messages
+      sendMessageBtn.addEventListener('click', sendMessage);
+      messageInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          sendMessage();
         }
       });
+      
+      // Send message function
+      async function sendMessage() {
+        const message = messageInput.value;
+        
+        if (!message.trim()) {
+          return;
+        }
+        
+        // Add user message to chat
+        addMessage(message, true);
+        messageInput.value = '';
+        
+        // Send to webhook
+        await sendToWebhook(message);
+      }
     });
   </script>
 </body>
